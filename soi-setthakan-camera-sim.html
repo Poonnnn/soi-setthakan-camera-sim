@@ -4,8 +4,1008 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Soi Setthakan kerb-parking camera simulator</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#0d1117;color:#e6e8eb;
+    font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI","Thonburi","Noto Sans Thai",Tahoma,sans-serif}
+  #gl{position:fixed;inset:0;width:100%;height:100%;display:block}
+  .panel{position:fixed;top:0;bottom:0;background:rgba(16,20,27,.93);overflow-y:auto;padding:8px 10px;box-sizing:border-box;z-index:5}
+  #left{left:0;width:296px;border-right:1px solid #2a313c}
+  #right{right:0;width:344px;border-left:1px solid #2a313c}
+  .hidden{display:none}
+  .tog{position:fixed;top:6px;z-index:6;background:#1f2733;color:#e6e8eb;border:1px solid #3a4453;border-radius:4px;padding:2px 7px;cursor:pointer}
+  h1{font-size:14px;margin:2px 0 8px 30px}
+  h3{font-size:12px;margin:12px 0 4px;color:#9fb4cc;text-transform:uppercase;letter-spacing:.04em}
+  details{border-top:1px solid #2a313c;padding:5px 0}
+  summary{cursor:pointer;font-weight:600;color:#cfe0f5;padding:2px 0}
+  .row{display:grid;grid-template-columns:112px 1fr 52px;gap:6px;align-items:center;margin:3px 0}
+  .row.c{grid-template-columns:1fr}
+  .row input[type=range]{width:100%;margin:0}
+  .row .val{text-align:right;font-variant-numeric:tabular-nums;color:#ffd38a}
+  select,button{background:#1f2733;color:#e6e8eb;border:1px solid #3a4453;border-radius:4px;padding:3px 7px;font:inherit;cursor:pointer}
+  button:hover{background:#2b3646}
+  button.on{background:#1d4ed8;border-color:#3b82f6}
+  .btns{display:flex;flex-wrap:wrap;gap:5px;margin:5px 0}
+  .note{color:#93a1b3;font-size:11px;margin:3px 0}
+  .warn{color:#fbbf24}
+  #hud{position:fixed;top:6px;left:50%;transform:translateX(-50%);z-index:4;background:rgba(16,20,27,.85);
+    padding:5px 10px;border-radius:6px;max-width:44vw;text-align:center;pointer-events:none}
+  #pip{position:fixed;z-index:3;border:2px solid #22d3ee;box-sizing:content-box;pointer-events:none}
+  #pipTitle{position:absolute;left:-2px;top:-24px;height:22px;display:flex;gap:4px;align-items:center;pointer-events:auto;
+    background:rgba(16,20,27,.9);padding:0 6px;border-radius:4px 4px 0 0;white-space:nowrap}
+  #pipTitle button{padding:0 6px}
+  #pipOv{position:absolute;inset:0;width:100%;height:100%}
+  table{border-collapse:collapse;width:100%}
+  td,th{padding:2px 4px;border-bottom:1px solid #232a34;text-align:left;vertical-align:top}
+  th{color:#9fb4cc;font-weight:600}
+  .chip{display:inline-block;border-radius:3px;padding:0 5px;color:#0b0e12;font-weight:600}
+  .g{background:#22c55e}.a{background:#f59e0b}.r{background:#ef4444}.x{background:#6b7280;color:#fff}.m{background:#3b82f6;color:#fff}
+  #log{font-family:ui-monospace,Menlo,Consolas,"Thonburi",monospace;font-size:11px;max-height:260px;overflow-y:auto;background:#0b0e12;border:1px solid #232a34;padding:4px}
+  #log div{white-space:nowrap}
+  .en{color:#86efac}.ex{color:#fca5a5}.np{color:#9ca3af}
+  #zone,#aimOut{background:#0b0e12;border:1px solid #232a34;padding:5px 6px;white-space:pre-wrap}
+  b.big{font-size:14px;color:#fde68a}
+  kbd{background:#2b3646;border-radius:3px;padding:0 4px}
+</style>
 </head>
 <body>
-<p>Pending full HTML upload</p>
+<canvas id="gl"></canvas>
+<button class="tog" id="togL" style="left:6px">☰</button>
+<button class="tog" id="togR" style="right:6px">☰</button>
+<div id="left" class="panel"><h1>Soi Setthakan camera test</h1></div>
+<div id="right" class="panel">
+  <h3 style="margin-top:28px">Readable zone (selected camera)</h3><div id="zone"></div>
+  <h3>Auto-aim</h3><div id="aimOut">Press “Auto-aim” in the Cameras section.</div>
+  <h3>Bays</h3><div id="cover" class="note"></div>
+  <table id="bays"></table>
+  <div class="note">Now = a rear (R) or front (F) plate of a standard car standing in that bay, best camera.
+  Entry / Exit = events with a readable plate ÷ all events.</div>
+  <h3>Event log <button id="clearLog" style="float:right;padding:0 6px">clear</button></h3><div id="log"></div>
+</div>
+<div id="hud"></div>
+<div id="pip"><div id="pipTitle"></div><canvas id="pipOv"></canvas></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+'use strict';
+if(!window.THREE){document.body.innerHTML='<p style="padding:20px">Three.js could not be loaded from the CDN. Check the internet connection and reload.</p>';return;}
+
+// ---------------------------------------------------------------- constants (metres)
+const D2R=Math.PI/180,R2D=180/Math.PI;
+const LEN=90,BAY0=15,BAYL=5.0,NB=12,LANE_P=3.0,LANE_T=3.2,STRIP=1.0;
+const Z_KERB=0,Z_TEDGE=LANE_P+LANE_T,Z_FENCE=Z_TEDGE+STRIP;
+const FOOT_W=1.5,KERB_H=0.15,POST_Z=-0.3,TREE_Z=-0.8,LANE_Z=LANE_P+LANE_T/2,BAY_Z=LANE_P/2;
+const PLATE_W=0.34,PLATE_H=0.15,PLATE_Y=0.45;
+const SENS_W=3840,SENS_H=2160;
+const CAMCOL=['#22d3ee','#e879f9','#fb923c'];
+const $=id=>document.getElementById(id);
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const rand=(a,b)=>a+Math.random()*(b-a);
+const rint=(a,b)=>Math.floor(rand(a,b+1));
+const pad=n=>String(n).padStart(2,'0');
+
+// ---------------------------------------------------------------- settings
+const S={postSpacing:20,postFirst:5,treeFirst:2,treeSpacing:10,canopyW:4.5,canopies:true,
+  pxOk:40,pxGood:50,maxH:30,maxV:30,entryT:3,exitWin:5,carsBlock:false,sameCamOnly:true,
+  night:false,ai:false,stayMin:20,stayMax:90,speed:1,follow:false,footprints:true,boxes:true,
+  nCams:3,link:true,sel:0,addType:'random',preMarked:true};
+const CAMS=[0,1,2].map(i=>({side:'kerb',post:i,h:6,arm:2,pan:0,tilt:-22,lens:'tele',focal:11,focalW:11}));
+let posts=[];
+
+// ---------------------------------------------------------------- three basics
+const canvas=$('gl');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+renderer.autoClear=false;
+const scene=new THREE.Scene();
+const mainCam=new THREE.PerspectiveCamera(45,1,0.3,700);mainCam.layers.enable(1);
+const pipCam=new THREE.PerspectiveCamera(19,16/9,0.3,500);
+const hemi=new THREE.HemisphereLight(0xffffff,0x8d8a80,0.8);scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xffffff,0.7);sun.position.set(-30,70,45);scene.add(sun);
+const matCache={};
+function lam(c){return matCache[c]||(matCache[c]=new THREE.MeshLambertMaterial({color:c}));}
+function boxGeo(list){
+  const pos=[],nor=[],uv=[];
+  for(const b of list){const g=new THREE.BoxGeometry(b[0],b[1],b[2]).toNonIndexed();g.translate(b[3],b[4],b[5]);
+    const p=g.attributes.position.array,n=g.attributes.normal.array,u=g.attributes.uv.array;
+    for(let i=0;i<p.length;i++){pos.push(p[i]);nor.push(n[i]);}
+    for(let i=0;i<u.length;i++)uv.push(u[i]);g.dispose();}
+  const G=new THREE.BufferGeometry();
+  G.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  G.setAttribute('normal',new THREE.Float32BufferAttribute(nor,3));
+  G.setAttribute('uv',new THREE.Float32BufferAttribute(uv,2));return G;
+}
+function addBoxes(list,color,parent){const m=new THREE.Mesh(boxGeo(list),lam(color));(parent||scene).add(m);return m;}
+function clearGroup(g){while(g.children.length){const c=g.children[0];g.remove(c);c.traverse(o=>{if(o.geometry)o.geometry.dispose();});}}
+function textTex(text,w,h,font,fg,bg){
+  const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d');
+  if(bg){x.fillStyle=bg;x.fillRect(0,0,w,h);}
+  x.fillStyle=fg;x.font=font;x.textAlign='center';x.textBaseline='middle';x.fillText(text,w/2,h/2+2);
+  const t=new THREE.CanvasTexture(c);t.anisotropy=4;return t;
+}
+function label(text,color,scale){
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:textTex(text,256,64,'bold 40px sans-serif',color,'rgba(10,14,20,.75)'),depthTest:false}));
+  s.scale.set(4*scale,1*scale,1);s.layers.set(1);s.renderOrder=10;return s;
+}
+
+// ---------------------------------------------------------------- static street
+const staticOcc=[];   // axis-aligned blockers {x0,x1,y0,y1,z0,z1,kind}
+let treeOcc=[],canopyOcc=[];
+const X0=-10,X1=LEN+10,XL=X1-X0,XC=(X0+X1)/2;
+(function buildStreet(){
+  addBoxes([[260,0.1,160,XC,-0.07,0]],0x6d7f58);                                   // surrounding ground
+  addBoxes([[XL,0.1,Z_FENCE,XC,-0.05,Z_FENCE/2]],0xbab8b1);                        // concrete: parking + travel lane
+  addBoxes([[XL,0.05,STRIP,XC,0.025,Z_TEDGE+STRIP/2]],0xa8a49b);                   // paved strip, far side
+  addBoxes([[XL,KERB_H,FOOT_W,XC,KERB_H/2,-FOOT_W/2]],0xaaa69d);                   // footpath
+  addBoxes([[XL,KERB_H+0.006,0.15,XC,KERB_H/2,-0.075]],0x8c8982);                  // kerb stone
+  addBoxes([[XL,1.3,0.3,XC,0.65,-FOOT_W-0.15],[XL,0.08,0.4,XC,1.34,-FOOT_W-0.15]],0xf3f1ea); // boundary wall
+  staticOcc.push({x0:X0,x1:X1,y0:0,y1:1.38,z0:-FOOT_W-0.3,z1:-FOOT_W,kind:'wall'});
+  const bz=-FOOT_W-0.3-2;                                                          // building face, 2 m behind wall
+  addBoxes([[XL,9,8,XC,4.5,bz-4]],0xf5f4ef);
+  staticOcc.push({x0:X0,x1:X1,y0:0,y1:9,z0:bz-8,z1:bz,kind:'building'});
+  const sh=[];for(let x=X0+3;x<X1-2;x+=4.5){sh.push([1.3,2.4,0.08,x,1.3,bz+0.03]);sh.push([1.2,2.0,0.08,x,6.3,bz+0.03]);}
+  addBoxes(sh,0x2f55a4);
+  const rs=new THREE.Shape();rs.moveTo(-4.7,0);rs.lineTo(4.7,0);rs.lineTo(0,2.7);rs.lineTo(-4.7,0);
+  const roof=new THREE.Mesh(new THREE.ExtrudeGeometry(rs,{depth:XL,bevelEnabled:false}),lam(0xa8322d));
+  roof.rotation.y=Math.PI/2;roof.position.set(X0,9,bz-4);scene.add(roof);
+  // fence on the far side
+  addBoxes([[XL,0.6,0.3,XC,0.3,Z_FENCE+0.15]],0x7a4a45);
+  const fb=[[XL,0.1,0.16,XC,1.95,Z_FENCE+0.15]];
+  for(let x=X0+1;x<X1;x+=3){fb.push([0.4,2.3,0.4,x,1.15,Z_FENCE+0.15]);fb.push([0.52,0.12,0.52,x,2.36,Z_FENCE+0.15]);}
+  addBoxes(fb,0xe9c98a);
+  const fc=document.createElement('canvas');fc.width=64;fc.height=128;const fx=fc.getContext('2d');
+  fx.fillStyle='#e9c98a';fx.fillRect(0,0,64,10);fx.fillRect(0,118,64,10);
+  for(const cx of [16,48]){fx.fillRect(cx-4,0,8,128);fx.beginPath();fx.ellipse(cx,64,9,26,0,0,7);fx.fill();}
+  const ft=new THREE.CanvasTexture(fc);ft.wrapS=THREE.RepeatWrapping;ft.repeat.set(XL/0.5,1);
+  const fp=new THREE.Mesh(new THREE.PlaneGeometry(XL,1.3),new THREE.MeshLambertMaterial({map:ft,alphaTest:0.5,side:THREE.DoubleSide}));
+  fp.position.set(XC,1.25,Z_FENCE+0.15);scene.add(fp);
+  staticOcc.push({x0:X0,x1:X1,y0:0,y1:2,z0:Z_FENCE,z1:Z_FENCE+0.3,kind:'fence'});
+  // bay marks: white corner marks on the lane-side edge of each bay
+  const mk=[];
+  for(let i=0;i<=NB;i++){const xb=BAY0+i*BAYL;
+    mk.push([0.1,0.012,0.6,xb,0.006,LANE_P-0.3]);
+    const a=i===0?xb:xb-0.6,b=i===NB?xb:xb+0.6;mk.push([b-a,0.012,0.1,(a+b)/2,0.006,LANE_P-0.05]);}
+  addBoxes(mk,0xffffff);
+})();
+
+// bay overlays + numbers (layer 1 = not seen by the virtual camera)
+const bayMesh=[];
+for(let b=0;b<NB;b++){
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(BAYL-0.14,LANE_P-0.14),new THREE.MeshBasicMaterial({color:0xef4444,transparent:true,opacity:0.33,depthWrite:false}));
+  m.rotation.x=-Math.PI/2;m.position.set(BAY0+(b+0.5)*BAYL,0.02,BAY_Z);m.layers.set(1);scene.add(m);bayMesh.push(m);
+  const n=new THREE.Mesh(new THREE.PlaneGeometry(1.1,0.75),new THREE.MeshBasicMaterial({map:textTex(String(b+1),96,64,'bold 48px sans-serif','#1f2937',null),transparent:true,depthWrite:false}));
+  n.rotation.x=-Math.PI/2;n.position.set(BAY0+(b+0.5)*BAYL,0.021,LANE_P+0.55);n.layers.set(1);scene.add(n);
+}
+
+// trees, lamp posts (rebuilt when their settings change)
+const treeG=new THREE.Group(),postG=new THREE.Group(),gizG=new THREE.Group();scene.add(treeG,postG,gizG);
+const lampMat=new THREE.MeshLambertMaterial({color:0xffffff,emissive:0x000000});
+function buildTrees(){
+  clearGroup(treeG);treeOcc=[];canopyOcc=[];
+  for(let x=S.treeFirst;x<=LEN;x+=S.treeSpacing){
+    const tr=new THREE.Mesh(new THREE.CylinderGeometry(0.13,0.17,3.4,8),lam(0x6b5a45));tr.position.set(x,KERB_H+1.7,TREE_Z);treeG.add(tr);
+    treeOcc.push({x0:x-0.15,x1:x+0.15,y0:0,y1:3.5,z0:TREE_Z-0.15,z1:TREE_Z+0.15,kind:'tree trunk'});
+    if(S.canopies){
+      const c=new THREE.Mesh(new THREE.SphereGeometry(1,12,9),lam(0x5aa23f));c.scale.set(S.canopyW/2,2,S.canopyW/2);c.position.set(x,5,TREE_Z);treeG.add(c);
+      canopyOcc.push({x,y:5,z:TREE_Z,rx:S.canopyW/2,ry:2,rz:S.canopyW/2});
+    }
+  }
+}
+function buildPosts(){
+  clearGroup(postG);posts=[];
+  for(let x=S.postFirst;x<=LEN+0.01;x+=S.postSpacing)posts.push(x);
+  const g=lam(0x14432e);
+  posts.forEach((x,i)=>{
+    const p=new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.1,6,10),g);p.position.set(x,KERB_H+3,POST_Z);postG.add(p);
+    const b=new THREE.Mesh(new THREE.CylinderGeometry(0.15,0.18,0.9,10),g);b.position.set(x,KERB_H+0.45,POST_Z);postG.add(b);
+    const a=new THREE.Mesh(new THREE.BoxGeometry(1.3,0.06,0.06),g);a.position.set(x,KERB_H+5.75,POST_Z);postG.add(a);
+    for(const s of [-0.6,0.6]){const l=new THREE.Mesh(new THREE.SphereGeometry(0.17,10,8),lampMat);l.position.set(x+s,KERB_H+5.52,POST_Z);postG.add(l);}
+    const pl=new THREE.PointLight(0xffe0ad,S.night?3.2:0,30,1.2);pl.position.set(x,5.4,0.5);pl.userData.lamp=true;postG.add(pl);
+    const lb=label('Post '+(i+1),'#a7f3d0',0.55);lb.position.set(x,KERB_H+6.9,POST_Z);postG.add(lb);
+  });
+  for(const c of CAMS)c.post=clamp(c.post,0,posts.length-1);
+}
+function applyNight(){
+  scene.background=new THREE.Color(S.night?0x0a0f1c:0x9fc9ee);
+  hemi.intensity=S.night?0.2:0.8;sun.intensity=S.night?0.04:0.7;
+  lampMat.emissive.setHex(S.night?0xffe7b8:0x000000);
+  postG.traverse(o=>{if(o.userData.lamp)o.intensity=S.night?3.2:0;});
+}
+
+// ---------------------------------------------------------------- virtual plate cameras
+const CM=[{}, {}, {}];
+// Published views (iDS-TCR803-G datasheet, 7 Aug 2024), full angles:
+//   11-55 mm: H 33.51° to 8.06°,   V 18.75° to 4.61°
+//    4-11 mm: H 112.48° to 41.17°, V 57.76° to 23.31°
+// Between the two ends the view is estimated (tangent of the half-angle linear in 1/focal length).
+const LENS={tele:{f0:11,f1:55,h0:33.51,h1:8.06,v0:18.75,v1:4.61},wide:{f0:4,f1:11,h0:112.48,h1:41.17,v0:57.76,v1:23.31}};
+function lensTan(c){
+  const L=LENS[c.lens],f=c.lens==='tele'?c.focal:c.focalW,t=(1/f-1/L.f1)/(1/L.f0-1/L.f1);
+  const it=(a0,a1)=>Math.tan(a1/2*D2R)+(Math.tan(a0/2*D2R)-Math.tan(a1/2*D2R))*t;
+  return [it(L.h0,L.h1),it(L.v0,L.v1)];
+}
+function basis(cm,panDeg,tiltDeg){
+  const p=panDeg*D2R,t=clamp(tiltDeg,-89.5,89.5)*D2R,ct=Math.cos(t);
+  cm.fx=ct*Math.cos(p);cm.fy=Math.sin(t);cm.fz=ct*Math.sin(p);
+  cm.rx=-Math.sin(p);cm.rz=Math.cos(p);
+  cm.ux=-cm.rz*cm.fy;cm.uy=cm.rz*cm.fx-cm.rx*cm.fz;cm.uz=cm.rx*cm.fy;
+}
+function computeCM(){
+  for(let i=0;i<3;i++){const c=CAMS[i],cm=CM[i];
+    cm.x=posts[clamp(c.post,0,posts.length-1)];cm.y=c.h;cm.z=c.side==='kerb'?POST_Z+c.arm:Z_FENCE-c.arm;
+    basis(cm,c.pan,c.tilt);const t=lensTan(c);cm.tanH=t[0];cm.tanV=t[1];}
+}
+// geometry of one plate seen from one camera
+function geom(cm,x,y,z,nx,nz){
+  const dx=x-cm.x,dy=y-cm.y,dz=z-cm.z,zc=dx*cm.fx+dy*cm.fy+dz*cm.fz;
+  const r={st:'out',px:0,h:0,v:0,u:0,w:0,inF:false,blk:''};
+  const hor=Math.hypot(dx,dz)||1e-6;
+  r.h=Math.acos(clamp((-dx*nx-dz*nz)/hor,-1,1))*R2D;       // horizontal angle off the plate's facing direction
+  r.v=Math.abs(Math.atan2(-dy,hor))*R2D;                  // vertical angle (camera above the plate)
+  if(zc>0.2){
+    const xr=dx*cm.rx+dz*cm.rz,yu=dx*cm.ux+dy*cm.uy+dz*cm.uz,hh=PLATE_H/2;
+    r.u=xr/(zc*cm.tanH);r.w=yu/(zc*cm.tanV);r.inF=Math.abs(r.u)<=1&&Math.abs(r.w)<=1;
+    const wt=(yu+hh*cm.uy)/((zc+hh*cm.fy)*cm.tanV),wb=(yu-hh*cm.uy)/((zc-hh*cm.fy)*cm.tanV);
+    r.px=Math.abs(wt-wb)*SENS_H/2;                        // plate height on the 2160-line image
+  }
+  return r;
+}
+function segBox(ax,ay,az,bx,by,bz,x0,x1,y0,y1,z0,z1){
+  let t0=0,t1=1,d,ta,tb,s;
+  d=bx-ax;if(Math.abs(d)<1e-9){if(ax<x0||ax>x1)return false;}else{ta=(x0-ax)/d;tb=(x1-ax)/d;if(ta>tb){s=ta;ta=tb;tb=s;}if(ta>t0)t0=ta;if(tb<t1)t1=tb;if(t0>t1)return false;}
+  d=by-ay;if(Math.abs(d)<1e-9){if(ay<y0||ay>y1)return false;}else{ta=(y0-ay)/d;tb=(y1-ay)/d;if(ta>tb){s=ta;ta=tb;tb=s;}if(ta>t0)t0=ta;if(tb<t1)t1=tb;if(t0>t1)return false;}
+  d=bz-az;if(Math.abs(d)<1e-9){if(az<z0||az>z1)return false;}else{ta=(z0-az)/d;tb=(z1-az)/d;if(ta>tb){s=ta;ta=tb;tb=s;}if(ta>t0)t0=ta;if(tb<t1)t1=tb;if(t0>t1)return false;}
+  return true;
+}
+// line of sight from a plate (a) to a camera (b); returns what blocks it, or ''
+function segBlocked(ax,ay,az,bx,by,bz,skipBay,noCars){
+  for(const o of staticOcc)if(segBox(ax,ay,az,bx,by,bz,o.x0,o.x1,o.y0,o.y1,o.z0,o.z1))return o.kind;
+  for(const o of treeOcc)if(segBox(ax,ay,az,bx,by,bz,o.x0,o.x1,o.y0,o.y1,o.z0,o.z1))return o.kind;
+  for(const e of canopyOcc){
+    const px=(ax-e.x)/e.rx,py=(ay-e.y)/e.ry,pz=(az-e.z)/e.rz,dx=(bx-ax)/e.rx,dy=(by-ay)/e.ry,dz=(bz-az)/e.rz;
+    const t=clamp(-(px*dx+py*dy+pz*dz)/(dx*dx+dy*dy+dz*dz),0,1),qx=px+t*dx,qy=py+t*dy,qz=pz+t*dz;
+    if(qx*qx+qy*qy+qz*qz<1)return 'tree';
+  }
+  if(!noCars)for(const u of vehicles){
+    if(skipBay>=0&&u.inBay===skipBay)continue;
+    const c=Math.cos(u.th),s=Math.sin(u.th);
+    let dx=ax-u.x,dz=az-u.z;const lax=dx*c+dz*s,laz=-dx*s+dz*c;
+    dx=bx-u.x;dz=bz-u.z;const lbx=dx*c+dz*s,lbz=-dx*s+dz*c;
+    for(const o of u.T.occ)if(segBox(lax,ay,laz,lbx,by,lbz,o[0],o[1],o[2],o[3],-o[4],o[4]))return 'car';
+  }
+  return '';
+}
+const RANK={out:0,back:0,hidden:1,angle:2,small:3,ok:4,good:5};
+const STXT={out:'out of frame',back:'facing away',hidden:'hidden',angle:'angle too steep',small:'too small',ok:'readable',good:'good'};
+function classify(cm,r,x,y,z,nx,nz,skipBay,noCars){
+  if(!r.inF)return r.st='out';
+  if(r.h>=90)return r.st='back';
+  const b=segBlocked(x+nx*0.03,y,z+nz*0.03,cm.x,cm.y,cm.z,skipBay,noCars);
+  if(b){r.blk=b;return r.st='hidden';}
+  if(r.h>S.maxH||r.v>S.maxV)return r.st='angle';
+  if(r.px<S.pxOk)return r.st='small';
+  return r.st=r.px>=S.pxGood?'good':'ok';
+}
+// near / far limits along the bay centre line, measured from the post
+function zoneScan(ci){
+  const cm=CM[ci],sg=cm.fx>=0?1:-1,o={sg,rn:null,rf:null,an:null,af:null,fn:null,ff:null};
+  for(let d=1;d<=90;d+=0.1){
+    const x=cm.x+sg*d,g=geom(cm,x,PLATE_Y,BAY_Z,-sg,0);
+    const D=Math.hypot(x-cm.x,PLATE_Y-cm.y,BAY_Z-cm.z),pxA=PLATE_H*Math.cos(g.v*D2R)/(D*cm.tanV)*SENS_H/2;
+    const ang=g.h<=S.maxH&&g.v<=S.maxV;
+    if(ang&&pxA>=S.pxOk){if(o.rn==null)o.rn=d;o.rf=d;}
+    if(g.inF){if(o.fn==null)o.fn=d;o.ff=d;if(ang&&g.px>=S.pxOk){if(o.an==null)o.an=d;o.af=d;}}
+  }
+  return o;
+}
+function aimDefault(ci){
+  const c=CAMS[ci];computeCM();
+  c.pan=+(Math.atan2(BAY_Z-CM[ci].z,16)*R2D).toFixed(1);computeCM();
+  const z=zoneScan(ci),h=CM[ci].y-PLATE_Y,near=z.rn==null?8:z.rn,far=z.rf==null?24:Math.min(z.rf,60);
+  c.tilt=+(-(Math.atan2(h,near)+Math.atan2(h,far))/2*R2D).toFixed(1);computeCM();
+}
+// would the rear plate in bay b be hidden if a standard sedan stood in every other bay?
+function fullRowHidden(cm,b){
+  const x=BAY0+b*BAYL+0.2-0.03;
+  for(let k=0;k<NB;k++){if(k===b)continue;const cx=BAY0+(k+0.5)*BAYL;
+    for(const o of TYPES.sedan.occ)if(segBox(x,PLATE_Y,BAY_Z,cm.x,cm.y,cm.z,cx+o[0],cx+o[1],o[2],o[3],BAY_Z-o[4],BAY_Z+o[4]))return true;}
+  return false;
+}
+// mode 'near': the group of bays starting at the first one ahead of the post; mode 'far': the longest run anywhere
+function autoAim(ci,mode){
+  computeCM();const c=CAMS[ci],cm=CM[ci],hh=PLATE_H/2;
+  const T=[];
+  for(let b=0;b<NB;b++){const x=BAY0+b*BAYL+0.2,g=geom(cm,x,PLATE_Y,BAY_Z,-1,0);
+    const hid=segBlocked(x-0.03,PLATE_Y,BAY_Z,cm.x,cm.y,cm.z,b,!S.carsBlock);
+    T.push({dx:x-cm.x,dy:PLATE_Y-cm.y,dz:BAY_Z-cm.z,h:g.h,v:g.v,ok:!hid&&g.h<=S.maxH&&g.v<=S.maxV,hid});}
+  const zooms=[];
+  if(c.lens==='tele')for(let f=11;f<=55;f++)zooms.push({val:f,t:lensTan({lens:'tele',focal:f})});
+  else for(let f=4;f<=11.001;f+=0.25)zooms.push({val:f,t:lensTan({lens:'wide',focalW:f})});
+  const tm={},zc=new Float64Array(NB),xr=new Float64Array(NB),yu=new Float64Array(NB),pu=new Float64Array(NB);
+  let best=null,first=-1;const pan0=Math.atan2(BAY_Z-cm.z,16)*R2D;
+  for(let b=0;b<NB;b++)if(T[b].ok&&T[b].dx>0){first=b;break;}
+  for(let pan=-45;pan<=45;pan+=1)for(let tilt=-70;tilt<=-2;tilt+=0.5){
+    basis(tm,pan,tilt);
+    for(let b=0;b<NB;b++){const t=T[b];zc[b]=t.dx*tm.fx+t.dy*tm.fy+t.dz*tm.fz;xr[b]=t.dx*tm.rx+t.dz*tm.rz;yu[b]=t.dx*tm.ux+t.dy*tm.uy+t.dz*tm.uz;
+      pu[b]=zc[b]>0.3?Math.abs((yu[b]+hh*tm.uy)/(zc[b]+hh*tm.fy)-(yu[b]-hh*tm.uy)/(zc[b]-hh*tm.fy))*SENS_H/2:0;}
+    for(const z of zooms){
+      let run=0,rmin=1e9,bl=0,bs=0,bm=0;
+      for(let b=0;b<NB;b++){
+        const px=pu[b]/z.t[1];
+        if(T[b].ok&&zc[b]>0.3&&Math.abs(xr[b]/(zc[b]*z.t[0]))<=0.96&&Math.abs(yu[b]/(zc[b]*z.t[1]))<=0.96&&px>=S.pxOk){
+          run++;if(px<rmin)rmin=px;
+          if((mode==='far'||b-run+1===first)&&(run>bl||(run===bl&&rmin>bm))){bl=run;bs=b-run+1;bm=rmin;}
+        }else{run=0;rmin=1e9;}
+      }
+      const score=bl*1000+Math.min(bm,150)-0.4*Math.abs(pan-pan0);
+      if(bl>0&&(!best||score>best.score))best={score,len:bl,start:bs,pan,tilt,zoom:z.val,minPx:bm};
+    }
+  }
+  if(!best)return {ci,len:0,text:`Camera ${ci+1}: no bay has a readable rear plate from this mount.`};
+  c.pan=best.pan;c.tilt=best.tilt;if(c.lens==='tele')c.focal=best.zoom;else c.focalW=best.zoom;
+  computeCM();
+  let pmin=1e9,pmax=0,vmax=0,vb=0;
+  for(let b=best.start;b<best.start+best.len;b++){const g=geom(CM[ci],BAY0+b*BAYL+0.2,PLATE_Y,BAY_Z,-1,0);
+    pmin=Math.min(pmin,g.px);pmax=Math.max(pmax,g.px);if(g.v>vmax){vmax=g.v;vb=b;}}
+  const t=lensTan(c),z=zoneScan(ci),vis=[];
+  for(let b=best.start;b<best.start+best.len;b++)if(!fullRowHidden(CM[ci],b))vis.push(b+1);
+  return {ci,len:best.len,start:best.start,text:
+    `Camera ${ci+1} (post ${c.post+1}, x = ${CM[ci].x.toFixed(1)} m): ${best.len} bay${best.len>1?'s':''} — bays ${best.start+1}–${best.start+best.len}\n`+
+    `  pan ${best.pan.toFixed(1)}°, tilt ${best.tilt.toFixed(1)}°, ${best.zoom} mm (${c.lens==='tele'?'11–55':'4–11'} mm lens)`+
+    ` → view ${(2*Math.atan(t[0])*R2D).toFixed(1)}° × ${(2*Math.atan(t[1])*R2D).toFixed(1)}°\n`+
+    `  plate height ${pmin.toFixed(0)}–${pmax.toFixed(0)} px, steepest vertical angle ${vmax.toFixed(1)}° (bay ${vb+1})\n`+
+    `  readable ${z.an==null?'—':z.an.toFixed(1)+'–'+z.af.toFixed(1)} m ahead of the post\n`+
+    `  if a sedan stood in every bay, the parked rear plate would still be visible in: ${vis.length?'bays '+ranges(vis):'no bay'}`};
+}
+
+// camera gizmos, footprints
+const footG=new THREE.Group();scene.add(footG);
+const foot=[0,1,2].map(i=>{
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(new Float32Array(12),3));g.setIndex([0,1,2,0,2,3]);
+  const col=new THREE.Color(CAMCOL[i]);
+  const m=new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.13,side:THREE.DoubleSide,depthWrite:false}));
+  const l=new THREE.LineLoop(g,new THREE.LineBasicMaterial({color:col}));
+  const rg=new THREE.BufferGeometry();rg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(24),3));
+  const rays=new THREE.LineSegments(rg,new THREE.LineBasicMaterial({color:col,transparent:true,opacity:0.5}));
+  for(const o of [m,l,rays]){o.layers.set(1);o.frustumCulled=false;footG.add(o);}
+  return {g,rg,m,l,rays};
+});
+function updateFootprints(){
+  for(let i=0;i<3;i++){
+    const f=foot[i],on=i<S.nCams&&S.footprints;f.m.visible=f.l.visible=f.rays.visible=on;if(!on)continue;
+    const cm=CM[i],p=f.g.attributes.position.array,q=f.rg.attributes.position.array;
+    const cs=[[-1,-1],[1,-1],[1,1],[-1,1]];
+    for(let k=0;k<4;k++){
+      const a=cs[k][0]*cm.tanH,b=cs[k][1]*cm.tanV;
+      const dx=cm.fx+a*cm.rx+b*cm.ux,dy=cm.fy+b*cm.uy,dz=cm.fz+a*cm.rz+b*cm.uz,hor=Math.hypot(dx,dz)||1e-6;
+      let t=dy<-1e-6?(0.035-cm.y)/dy:1e9;if(t*hor>75)t=75/hor;
+      p[k*3]=cm.x+dx*t;p[k*3+1]=0.035;p[k*3+2]=cm.z+dz*t;
+      q[k*6]=cm.x;q[k*6+1]=cm.y;q[k*6+2]=cm.z;q[k*6+3]=p[k*3];q[k*6+4]=Math.max(0.035,cm.y+dy*t);q[k*6+5]=p[k*3+2];
+    }
+    f.g.attributes.position.needsUpdate=true;f.rg.attributes.position.needsUpdate=true;
+  }
+}
+function buildGizmos(){
+  clearGroup(gizG);computeCM();
+  for(let i=0;i<S.nCams;i++){
+    const c=CAMS[i],cm=CM[i],g=new THREE.Group(),col=new THREE.Color(CAMCOL[i]);
+    const body=new THREE.Mesh(new THREE.BoxGeometry(0.2,0.16,0.42),lam(0xf1f1f1));body.position.z=-0.2;g.add(body);
+    const lens=new THREE.Mesh(new THREE.BoxGeometry(0.1,0.1,0.06),new THREE.MeshBasicMaterial({color:col}));lens.position.z=0.02;g.add(lens);
+    g.position.set(cm.x,cm.y,cm.z);g.lookAt(cm.x+cm.fx,cm.y+cm.fy,cm.z+cm.fz);gizG.add(g);
+    const mz=c.side==='kerb'?POST_Z:Z_FENCE+0.15,am=lam(c.side==='kerb'?0x14432e:0x8a8f98);
+    const len=Math.abs(cm.z-mz);
+    if(len>0.02){const arm=new THREE.Mesh(new THREE.BoxGeometry(0.06,0.06,len),am);arm.position.set(cm.x,cm.y+0.12,(cm.z+mz)/2);gizG.add(arm);}
+    if(c.side==='fence'){const p=new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,cm.y+0.15,8),am);p.position.set(cm.x,(cm.y+0.15)/2,mz);gizG.add(p);}
+    else if(cm.y>KERB_H+6){const e=new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.04,cm.y-6,8),am);e.position.set(cm.x,(cm.y+6.15)/2+0.07,mz);gizG.add(e);}
+    const lb=label('CAM '+(i+1),CAMCOL[i],0.5);lb.position.set(cm.x,cm.y+0.8,cm.z);gizG.add(lb);
+  }
+}
+
+// ---------------------------------------------------------------- vehicles
+const TYPES={
+  sedan:{L:4.6,W:1.8,H:1.45,front:true,steer:35,occ:[[-2.3,2.3,0.2,0.88,0.9],[-1.6,0.7,0.88,1.45,0.8]]},
+  suv:{L:4.7,W:1.9,H:1.7,front:true,steer:35,occ:[[-2.35,2.35,0.25,1.02,0.95],[-2.25,0.85,1.02,1.7,0.87]]},
+  van:{L:5.3,W:1.95,H:2.1,front:true,steer:33,occ:[[-2.65,2.65,0.25,1.15,0.975],[-2.6,1.9,1.15,2.1,0.93]]},
+  tuk:{L:2.6,W:1.3,H:1.8,front:false,steer:40,occ:[[-1.3,0.95,0.25,0.95,0.65],[-1.25,0.65,1.66,1.8,0.65]]},
+  scooter:{L:1.8,W:0.7,H:1.1,front:false,steer:40,occ:[[-0.9,0.85,0.2,0.85,0.18]]}
+};
+// Shorter than the first brief (4.6 / 4.7 / 5.3 m) so cars fit the 5 m bays with room to move in and out.
+const SHORT={sedan:4.3,suv:4.4,van:4.8};
+for(const k in SHORT){const T=TYPES[k],f=SHORT[k]/T.L;T.L=SHORT[k];for(const o of T.occ){o[0]*=f;o[1]*=f;}}
+for(const k in TYPES)TYPES[k].wb=TYPES[k].L*0.58;
+const TNAME={sedan:'sedan',suv:'SUV',van:'van',tuk:'tuk-tuk',scooter:'scooter'};
+const COLORS=[0xf4f4f2,0xc9ccd1,0x2a2c31,0x7d8288,0x1f3a6e,0x8e1b1b,0xdedbd2,0x3b3f46];
+const THAI='กขคฆงจฉชฌญฎฐฒณดตถทธนบผพฟภมยรลวศษสฬอฮ';
+function randomPlate(){   // made-up Thai-format text
+  const c=()=>THAI[rint(0,THAI.length-1)];
+  return (Math.random()<0.6?rint(1,9):'')+c()+c()+' '+rint(1,9999);
+}
+function plateTex(text){
+  const c=document.createElement('canvas');c.width=272;c.height=120;const x=c.getContext('2d');
+  x.fillStyle='#fafafa';x.fillRect(0,0,272,120);x.strokeStyle='#111';x.lineWidth=6;x.strokeRect(5,5,262,110);
+  x.fillStyle='#111';x.textAlign='center';x.textBaseline='middle';
+  x.font='bold 58px "Thonburi","Sarabun","Noto Sans Thai","Tahoma",sans-serif';x.fillText(text,136,48);
+  x.font='bold 22px "Thonburi","Sarabun","Noto Sans Thai","Tahoma",sans-serif';x.fillText('กรุงเทพมหานคร',136,96);
+  const t=new THREE.CanvasTexture(c);t.anisotropy=8;return t;
+}
+const wheelGeo={};
+function wheel(r){if(!wheelGeo[r]){const g=new THREE.CylinderGeometry(r,r,0.2,14);g.rotateX(Math.PI/2);wheelGeo[r]=g;}return new THREE.Mesh(wheelGeo[r],lam(0x18181b));}
+let vehicles=[],nextId=1,selected=null;
+function makeVehicle(type,x,z,th,o){
+  o=o||{};const T=TYPES[type],L=T.L,W=T.W;
+  const v={id:nextId++,type,T,x,z,th,v:0,steer:0,text:randomPlate(),taxi:!!o.taxi,color:o.taxi?0x1f9d55:COLORS[rint(0,COLORS.length-1)],
+    best:[null,null,null],bay:-1,inBay:-1,stillT:0,stillBay:-1,parkedAt:0,entryRead:undefined,auto:!!o.auto,ai:null,leaveAt:null,pend:null,rank:0,fw:[],pl:[]};
+  const g=new THREE.Group(),col=lam(v.color),glass=lam(0x1d2a33),dark=lam(0x202024);
+  const add=(w,h,d,px,py,pz,m)=>{const me=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);me.position.set(px,py,pz);g.add(me);return me;};
+  const addWheel=(r,px,pz,steer)=>{const w=wheel(r);if(steer){const p=new THREE.Group();p.position.set(px,r,pz);p.add(w);g.add(p);v.fw.push(p);}else{w.position.set(px,r,pz);g.add(w);}};
+  if(type==='scooter'){
+    add(1.15,0.36,0.3,-0.05,0.55,0,col);add(0.62,0.1,0.3,-0.35,0.8,0,dark);add(0.08,0.62,0.08,0.52,0.78,0,dark);add(0.06,0.06,0.6,0.52,1.07,0,dark);
+    addWheel(0.26,0.62,0,true);addWheel(0.26,-0.62,0,false);
+  }else if(type==='tuk'){
+    add(2.25,0.6,1.26,-0.175,0.6,0,col);add(1.9,0.1,1.3,-0.3,1.75,0,lam(0xd9b310));
+    for(const px of [-1.2,0.6])for(const pz of [-0.6,0.6])add(0.05,0.8,0.05,px,1.3,pz,dark);
+    add(0.04,0.7,1.1,0.62,1.3,0,glass);add(0.5,0.45,1.15,-0.9,1.1,0,dark);
+    addWheel(0.24,0.85,0,true);addWheel(0.24,-0.8,-0.52,false);addWheel(0.24,-0.8,0.52,false);
+  }else{
+    const a=T.occ[0],b=T.occ[1];
+    add(a[1]-a[0],a[3]-a[2],a[4]*2,(a[0]+a[1])/2,(a[2]+a[3])/2,0,col);
+    add(b[1]-b[0],b[3]-b[2]-0.07,b[4]*2,(b[0]+b[1])/2,(b[2]+b[3]-0.07)/2,0,glass);
+    add(b[1]-b[0]+0.04,0.07,b[4]*2+0.04,(b[0]+b[1])/2,b[3]-0.035,0,v.taxi?lam(0xf2c014):col);
+    for(const s of [-1,1]){add(0.04,0.14,0.34,L/2+0.005,0.68,s*(W/2-0.3),lam(0xfff7d6));add(0.04,0.14,0.34,-L/2-0.005,0.72,s*(W/2-0.3),lam(0xb91c1c));}
+    for(const s of [-1,1]){addWheel(0.32,T.wb/2,s*(W/2-0.12),true);addWheel(0.32,-T.wb/2,s*(W/2-0.12),false);}
+  }
+  const tex=plateTex(v.text);v.tex=tex;
+  for(const sg of (T.front?[-1,1]:[-1])){
+    const pm=new THREE.Mesh(new THREE.PlaneGeometry(PLATE_W,PLATE_H),new THREE.MeshBasicMaterial({map:tex}));
+    pm.position.set(sg*(L/2+0.012),PLATE_Y,0);pm.rotation.y=sg*Math.PI/2;g.add(pm);
+    v.pl.push({sg,name:sg<0?'rear':'front',res:[]});
+  }
+  v.mark=new THREE.Mesh(new THREE.CircleGeometry(0.28,16),new THREE.MeshBasicMaterial({color:0x6b7280,side:THREE.DoubleSide}));
+  v.mark.rotation.x=-Math.PI/2;v.mark.position.y=T.H+0.4;v.mark.layers.set(1);g.add(v.mark);
+  const sg2=new THREE.BufferGeometry().setFromPoints([[-1,-1],[1,-1],[1,1],[-1,1]].map(p=>new THREE.Vector3(p[0]*(L/2+0.25),0.04,p[1]*(W/2+0.25))));
+  v.selBox=new THREE.LineLoop(sg2,new THREE.LineBasicMaterial({color:0xfde047}));v.selBox.layers.set(1);v.selBox.visible=false;g.add(v.selBox);
+  g.userData.veh=v;v.group=g;scene.add(g);vehicles.push(v);syncVeh(v);return v;
+}
+function syncVeh(v){v.group.position.set(v.x,0,v.z);v.group.rotation.y=-v.th;for(const p of v.fw)p.rotation.y=-v.steer;}
+function removeVehicle(v){
+  if(v.pend){v.pend.live=false;v.pend=null;}
+  scene.remove(v.group);v.tex.dispose();vehicles.splice(vehicles.indexOf(v),1);if(selected===v)select(null);
+}
+function select(v){if(selected)selected.selBox.visible=false;selected=v;if(v)v.selBox.visible=true;}
+
+// collisions: 2-D oriented boxes
+function obb(v,x,z,th,inf){return {x,z,c:Math.cos(th),s:Math.sin(th),hl:v.T.L/2+(inf||0),hw:v.T.W/2+(inf||0),wl:v.T.wb/2,ww:Math.max(0.05,v.T.W/2-0.12)};}
+function corners(o){const ax=o.c*o.hl,az=o.s*o.hl,bx=-o.s*o.hw,bz=o.c*o.hw;
+  return [[o.x+ax+bx,o.z+az+bz],[o.x+ax-bx,o.z+az-bz],[o.x-ax-bx,o.z-az-bz],[o.x-ax+bx,o.z-az+bz]];}
+function obbHit(a,b){
+  const dx=b.x-a.x,dz=b.z-a.z,R=a.hl+a.hw+b.hl+b.hw;if(dx*dx+dz*dz>R*R)return false;
+  const ax=[[a.c,a.s],[-a.s,a.c],[b.c,b.s],[-b.s,b.c]];
+  for(const u of ax){const d=Math.abs(dx*u[0]+dz*u[1]);
+    const ra=a.hl*Math.abs(a.c*u[0]+a.s*u[1])+a.hw*Math.abs(-a.s*u[0]+a.c*u[1]);
+    const rb=b.hl*Math.abs(b.c*u[0]+b.s*u[1])+b.hw*Math.abs(-b.s*u[0]+b.c*u[1]);
+    if(d>ra+rb)return false;}
+  return true;
+}
+// wheels stop at the kerb; the body may overhang the footpath by up to 0.45 m; the body stops at the fence
+function wallHit(o){
+  for(const c of corners(o))if(c[1]<Z_KERB-0.45||c[1]>Z_FENCE-0.05)return true;
+  for(const a of [-1,1])for(const b of [-1,1])if(o.z+a*o.s*o.wl+b*o.c*o.ww<Z_KERB+0.02)return true;
+  return false;
+}
+function poseBlocked(v,x,z,th,inf){
+  const o=obb(v,x,z,th,inf);if(wallHit(o))return 'wall';
+  for(const u of vehicles)if(u!==v&&obbHit(o,obb(u,u.x,u.z,u.th)))return u;
+  return null;
+}
+
+// the car I drive: bicycle model about the rear axle, no rails
+const keys={};
+function driveStep(v,dt){
+  const thr=(keys.up?1:0)-(keys.down?1:0),st=(keys.right?1:0)-(keys.left?1:0);
+  if((thr||st||keys.brake)&&(v.ai||v.auto)){v.ai=null;v.auto=false;}
+  if(v.ai)return;
+  const T=v.T,ms=T.steer*D2R*clamp(1-Math.abs(v.v)/16,0.35,1);
+  const rate=(st?1.3:2.4)*dt;v.steer+=clamp(st*ms-v.steer,-rate,rate);
+  if(keys.brake)v.v=Math.abs(v.v)<9*dt?0:v.v-Math.sign(v.v)*9*dt;
+  else if(thr>0)v.v=v.v<-0.05?Math.min(0,v.v+7*dt):Math.min(10,v.v+3*dt);
+  else if(thr<0)v.v=v.v>0.05?Math.max(0,v.v-7*dt):Math.max(-3.5,v.v-2.5*dt);
+  else v.v=Math.abs(v.v)<1.0*dt?0:v.v-Math.sign(v.v)*1.0*dt;
+  if(Math.abs(v.v)<1e-4)return;
+  const wb=T.wb,ds=v.v*dt;
+  const ax=v.x-wb/2*Math.cos(v.th)+ds*Math.cos(v.th),az=v.z-wb/2*Math.sin(v.th)+ds*Math.sin(v.th);
+  const th=v.th+ds/wb*Math.tan(v.steer),nx=ax+wb/2*Math.cos(th),nz=az+wb/2*Math.sin(th);
+  if(poseBlocked(v,nx,nz,th,0))v.v=0;else{v.x=nx;v.z=nz;v.th=th;}
+}
+
+// ---------------------------------------------------------------- AI traffic
+// A leaving car shuffles forward and back with the same steering model and collision test.
+// A parking car replays that manoeuvre backwards (reversing in from ahead of the bay).
+function planLeave(v,x0,z0,th0){
+  const wb=v.T.wb,ms=v.T.steer*D2R*0.95,ds=0.05;
+  let th=th0,ax=x0-wb/2*Math.cos(th),az=z0-wb/2*Math.sin(th);
+  const ax0=ax,tr=[{x:x0,z:z0,th,dir:0}],others=vehicles.filter(u=>u!==v).map(u=>obb(u,u.x,u.z,u.th));
+  const blocked=(x,z,t)=>{const o=obb(v,x,z,t,0.06);if(wallHit(o))return true;for(const u of others)if(obbHit(o,u))return true;return false;};
+  let dir=1,moved=0,stuck=0,rev=0;
+  for(let i=0;i<8000;i++){
+    const des=clamp(Math.atan2(LANE_Z-az,4),-0.65,0.65);
+    const sgn=des-th>=0?1:-1,step=dir*ds,out=LANE_Z-az>=0?1:-1;
+    const cand=dir>0?[clamp(2.5*(des-th),-ms,ms),ms*out,0]:[-ms*sgn,0,ms*sgn];
+    let nax,naz,nth,cx,cz,stop=true;
+    for(const st of cand){
+      nax=ax+step*Math.cos(th);naz=az+step*Math.sin(th);nth=th+step/wb*Math.tan(st);
+      cx=nax+wb/2*Math.cos(nth);cz=naz+wb/2*Math.sin(nth);
+      if(!blocked(cx,cz,nth)){stop=false;break;}
+    }
+    if(!stop&&dir<0&&(rev>=1.5||Math.abs(des-th)<0.03))stop=true;
+    if(stop){if(moved<1e-6){if(++stuck>=2)return null;}else stuck=0;dir=-dir;moved=0;rev=0;continue;}
+    ax=nax;az=naz;th=nth;moved+=ds;if(dir<0)rev+=ds;
+    tr.push({x:cx,z:cz,th,dir});
+    if(dir>0&&Math.abs(az-LANE_Z)<0.08&&Math.abs(th)<0.04&&ax>ax0+2)return tr;
+    if(ax>LEN+4)return tr;
+  }
+  return null;
+}
+function reverseTraj(tr){const n=tr.length,o=[];for(let j=0;j<n;j++){const p=tr[n-1-j];o.push({x:p.x,z:p.z,th:p.th,dir:j===0?0:-tr[n-j].dir});}return o;}
+function aiBusy(){return vehicles.some(v=>v.ai&&(v.ai.state==='approach'||v.ai.state==='play'));}
+function laneStep(v,dt,targetX){
+  let vmax=5.5;
+  if(isFinite(targetX))vmax=Math.min(vmax,Math.sqrt(Math.max(0,2*1.8*(targetX-v.x)))+0.15);
+  const look=Math.max(0.4,v.v*0.9+1.0);
+  if(poseBlocked(v,v.x+look,v.z,0,0)||poseBlocked(v,v.x+look/2,v.z,0,0))vmax=0;
+  v.v=Math.max(0,v.v+clamp(vmax-v.v,-7*dt,2.5*dt));v.x+=v.v*dt;v.th=0;v.steer=0;
+}
+function aiStep(v,dt){
+  const a=v.ai;
+  if(a.state==='lane'){laneStep(v,dt,Infinity);return;}
+  if(a.state==='approach'){
+    laneStep(v,dt,a.targetX);
+    if(a.targetX-v.x<0.06&&v.v<0.4){v.x=a.targetX;v.v=0;a.state='play';a.idx=0;a.acc=0;a.pause=0.6;}
+    return;
+  }
+  if(a.pause>0){a.pause-=dt;v.v=0;return;}
+  const tr=a.tr;a.acc+=1.6*dt/0.05;
+  while(a.acc>=1&&a.idx<tr.length-1){
+    const n=tr[a.idx+1];
+    if(poseBlocked(v,n.x,n.z,n.th,0)){a.acc=0;v.v=0;return;}
+    if(a.idx>0&&n.dir!==tr[a.idx].dir){a.pause=0.5;a.acc=0;v.v=0;a.idx++;v.x=n.x;v.z=n.z;v.th=n.th;return;}
+    a.idx++;a.acc-=1;
+  }
+  const p=tr[a.idx];
+  if(a.idx>=tr.length-1){
+    v.x=p.x;v.z=p.z;v.th=a.then==='parked'?p.th:0;v.v=0;v.steer=0;
+    if(a.then==='parked'){v.ai=null;v.leaveAt=simTime+rand(S.stayMin,Math.max(S.stayMin+1,S.stayMax));}
+    else v.ai={state:'lane'};
+    return;
+  }
+  const n=tr[a.idx+1],f=clamp(a.acc,0,1);
+  v.x=p.x+(n.x-p.x)*f;v.z=p.z+(n.z-p.z)*f;v.th=p.th+(n.th-p.th)*f;v.v=1.6*n.dir;
+  v.steer=clamp(Math.atan((n.th-p.th)/(0.05*n.dir||0.05)*v.T.wb),-0.65,0.65);
+}
+function bayFree(b){
+  const s=BAY0+b*BAYL+0.3,e=s+BAYL-0.6;
+  for(const u of vehicles){if(u.z-u.T.W/2>LANE_P)continue;if(u.x+u.T.L/2>s&&u.x-u.T.L/2<e)return false;}
+  return true;
+}
+let aiTimer=3;
+function aiManage(dt){
+  for(const v of vehicles)if(v.auto&&!v.ai&&v.bay>=0){
+    if(v.leaveAt==null)v.leaveAt=simTime+rand(S.stayMin,Math.max(S.stayMin+1,S.stayMax*1.5));
+    if(S.ai&&simTime>v.leaveAt&&!aiBusy()){
+      const clear=!vehicles.some(u=>u!==v&&u.z+u.T.W/2>LANE_P+0.2&&u.x>v.x-14&&u.x<v.x+12);
+      const tr=clear?planLeave(v,v.x,v.z,v.th):null;
+      if(tr)v.ai={state:'play',tr,idx:0,acc:0,pause:0.3,then:'lane'};else v.leaveAt=simTime+4;
+    }
+  }
+  if(!S.ai)return;
+  aiTimer-=dt;if(aiTimer>0)return;aiTimer=2;
+  if(aiBusy()||vehicles.length>26)return;
+  if(vehicles.some(u=>u.x<10&&u.z+u.T.W/2>LANE_P))return;
+  const r=Math.random(),type=r<0.4?'sedan':r<0.55?'sedan':r<0.8?'suv':r<0.9?'tuk':'scooter',taxi=r>=0.4&&r<0.55;
+  const free=[];for(let b=0;b<NB;b++)if(bayFree(b))free.push(b);
+  free.sort(()=>Math.random()-0.5);
+  if(Math.random()<0.2||!free.length){
+    const t=Math.random()<0.2?'van':type;const v=makeVehicle(t,-4,LANE_Z,0,{auto:true,taxi:t==='sedan'&&taxi});v.ai={state:'lane'};v.v=5;
+  }else{
+    const v=makeVehicle(type,-4,LANE_Z,0,{auto:true,taxi});let ok=false;
+    for(const b of free){
+      const tr=planLeave(v,BAY0+(b+0.5)*BAYL,BAY_Z,0);if(!tr)continue;
+      const last=tr[tr.length-1];v.z=last.z;v.v=5;v.ai={state:'approach',targetX:last.x,tr:reverseTraj(tr),then:'parked'};ok=true;break;
+    }
+    if(!ok){v.ai={state:'lane'};v.v=5;}
+  }
+  aiTimer=rand(5,13);
+}
+
+// ---------------------------------------------------------------- plate reads and parking events
+let simTime=0,events=[];
+const camSees=[[],[],[]],bayRes=[],bayCam=[[],[],[]];
+function bayAt(v){
+  if(v.x<BAY0||v.x>=BAY0+NB*BAYL||v.z<0.3||v.z>LANE_P-0.3||Math.abs(Math.sin(v.th))>0.3)return -1;
+  return Math.floor((v.x-BAY0)/BAYL);
+}
+function bestRead(v,bay){
+  let b=null;
+  for(let ci=0;ci<S.nCams;ci++){if(S.sameCamOnly&&!camSees[ci][bay])continue;const r=v.best[ci];if(r&&(!b||r.px>b.px))b={px:r.px,good:r.good,which:r.which,cam:ci};}
+  return b;
+}
+function baySeen(bay){for(let ci=0;ci<S.nCams;ci++)if(camSees[ci][bay])return true;return false;}
+function pushEvent(v,bay,kind){
+  const e={t:simTime,bay,kind,text:v.text,vtype:v.type,read:bestRead(v,bay),seen:baySeen(bay),live:false};
+  events.push(e);if(events.length>600)events.shift();return e;
+}
+function evaluateVehicles(dt){
+  for(const v of vehicles)v.inBay=bayAt(v);
+  for(const v of vehicles){
+    let top=0;const c=Math.cos(v.th),s=Math.sin(v.th);
+    for(const p of v.pl){
+      const off=p.sg*(v.T.L/2+0.012),x=v.x+off*c,z=v.z+off*s,nx=p.sg*c,nz=p.sg*s;
+      for(let ci=0;ci<S.nCams;ci++){
+        const r=geom(CM[ci],x,PLATE_Y,z,nx,nz);classify(CM[ci],r,x,PLATE_Y,z,nx,nz,-1,false);p.res[ci]=r;
+        if(RANK[r.st]>=4){const b=v.best[ci];if(!b||r.px>b.px)v.best[ci]={px:r.px,good:r.st==='good',which:p.name};if(!v.known){v.known=true;v.knownAt=simTime;}}
+        if(RANK[r.st]>top)top=RANK[r.st];
+      }
+    }
+    v.rank=top;
+    // events
+    if(v.pend){
+      if(simTime>v.pend.until){v.pend.live=false;v.pend=null;v.best=[null,null,null];}
+      else v.pend.read=bestRead(v,v.pend.bay);
+    }
+    if(v.bay<0){
+      const b=v.inBay;
+      if(b>=0&&Math.abs(v.v)<0.05){
+        if(b===v.stillBay)v.stillT+=dt;else{v.stillBay=b;v.stillT=0;}
+        if(v.stillT>=S.entryT){
+          if(v.pend){v.pend.live=false;v.pend=null;}
+          const e=pushEvent(v,b,'ENTRY');v.entryRead=e.read;v.bay=b;v.parkedAt=simTime;v.best=[null,null,null];v.stillT=0;
+        }
+      }else{v.stillT=0;v.stillBay=-1;}
+    }else{
+      const s0=BAY0+v.bay*BAYL;
+      if(v.x<s0-0.3||v.x>s0+BAYL+0.3||v.z>LANE_P+0.2){
+        const e=pushEvent(v,v.bay,'EXIT');e.live=true;e.until=simTime+S.exitWin;v.pend=e;v.bay=-1;v.stillT=0;v.stillBay=-1;v.leaveAt=null;
+      }
+    }
+  }
+}
+function evaluateBays(){
+  for(let ci=0;ci<3;ci++)for(let b=0;b<NB;b++){
+    if(ci>=S.nCams){camSees[ci][b]=false;bayCam[ci][b]=false;continue;}
+    // the bay counts as "in the picture" if its rear end, middle or front end is inside the frame
+    const s0=BAY0+b*BAYL;
+    camSees[ci][b]=geom(CM[ci],s0+0.2,PLATE_Y,BAY_Z,-1,0).inF||geom(CM[ci],s0+BAYL/2,0.6,BAY_Z,-1,0).inF||geom(CM[ci],s0+BAYL-0.2,PLATE_Y,BAY_Z,-1,0).inF;
+  }
+  for(let b=0;b<NB;b++){
+    let best=null;const s0=BAY0+b*BAYL;
+    for(let ci=0;ci<S.nCams;ci++)for(const sg of [-1,1]){
+      const x=sg<0?s0+0.2:s0+BAYL-0.2,r=geom(CM[ci],x,PLATE_Y,BAY_Z,sg,0);
+      classify(CM[ci],r,x,PLATE_Y,BAY_Z,sg,0,b,!S.carsBlock);r.cam=ci;r.which=sg<0?'R':'F';
+      if(sg<0)bayCam[ci][b]=RANK[r.st]>=4;
+      if(!best||RANK[r.st]>RANK[best.st]||(RANK[r.st]===RANK[best.st]&&r.px>best.px))best=r;
+    }
+    bayRes[b]=best;
+    bayMesh[b].material.color.setHex(!best?0xef4444:best.st==='good'?0x22c55e:best.st==='ok'?0xf59e0b:0xef4444);
+  }
+}
+
+// ---------------------------------------------------------------- populate / reset
+// full = true: a car in every one of the 12 bays
+function populate(full){
+  while(vehicles.length)removeVehicle(vehicles[0]);
+  events=[];simTime=0;aiTimer=3;nextId=1;
+  // otherwise 3 empty bays: two next to each other (easy to reverse into) and one single (a tight 5 m slot)
+  const empty=new Set();
+  if(!full){const e0=rint(0,NB-2);empty.add(e0);empty.add(e0+1);while(empty.size<3)empty.add(rint(0,NB-1));}
+  let list;
+  for(let attempt=0;attempt<40;attempt++){             // re-draw the mix if long vehicles bunch up too tightly
+  list=[];let prev='';
+  for(let b=0;b<NB;b++){
+    if(empty.has(b)){list.push(null);prev='';continue;}
+    const r=Math.random();let t=r<0.46?'sedan':r<0.68?'suv':r<0.82?'van':r<0.91?'tuk':'scooter';
+    if(t==='van'&&prev==='van')t='sedan';prev=t;
+    list.push({t,x:BAY0+(b+0.5)*BAYL,taxi:t==='sedan'&&Math.random()<0.25});
+  }
+  for(let k=0;k<25;k++)for(let b=0;b<NB-1;b++){           // keep nose-to-tail gaps of about 0.3-0.4 m
+    const a=list[b],c=list[b+1];if(!a||!c)continue;
+    const gap=(c.x-TYPES[c.t].L/2)-(a.x+TYPES[a.t].L/2);
+    if(gap<0.3){const p=(0.3-gap)/2;a.x-=p;c.x+=p;}
+    for(const [o,i] of [[a,b],[c,b+1]]){const cx=BAY0+(i+0.5)*BAYL,m=full?0.6:0.4;o.x=clamp(o.x,cx-m,cx+m);}
+  }
+  let ok=true;
+  for(let b=0;b<NB-1;b++){const a=list[b],c=list[b+1];if(a&&c&&(c.x-TYPES[c.t].L/2)-(a.x+TYPES[a.t].L/2)<0.28)ok=false;}
+  if(ok)break;
+  }
+  list.forEach((o,b)=>{if(!o)return;const v=makeVehicle(o.t,o.x,BAY_Z,0,{auto:true,taxi:o.taxi});v.bay=b;v.parkedAt=0;v.known=S.preMarked;});
+}
+
+// ---------------------------------------------------------------- UI
+const left=$('left'),ctrls=[];
+function el(tag,cls,html){const e=document.createElement(tag);if(cls)e.className=cls;if(html!=null)e.innerHTML=html;return e;}
+function sec(title,open){const d=el('details');d.open=!!open;d.appendChild(el('summary',null,title));left.appendChild(d);return d;}
+function slider(p,labelTxt,get,set,min,max,step,unit,after){
+  const r=el('div','row'),l=el('label',null,labelTxt),i=el('input'),v=el('span','val');
+  i.type='range';i.min=min;i.max=max;i.step=step;r.append(l,i,v);p.appendChild(r);
+  const dec=step<1?(String(step).split('.')[1]||'').length:0;
+  const show=()=>{i.value=get();v.textContent=(+get()).toFixed(dec)+(unit||'');};
+  i.addEventListener('input',()=>{set(parseFloat(i.value));if(after)after();refreshUI();});
+  ctrls.push(show);return r;
+}
+function check(p,labelTxt,get,set,after){
+  const r=el('div','row c'),l=el('label'),i=el('input');i.type='checkbox';l.append(i,' '+labelTxt);r.appendChild(l);p.appendChild(r);
+  i.addEventListener('change',()=>{set(i.checked);if(after)after();refreshUI();});ctrls.push(()=>{i.checked=!!get();});return r;
+}
+function choice(p,labelTxt,opts,get,set,after){
+  const r=el('div','row'),l=el('label',null,labelTxt),s=el('select');r.style.gridTemplateColumns='112px 1fr';
+  const fill=()=>{const o=typeof opts==='function'?opts():opts;s.innerHTML='';for(const [val,txt] of o){const op=el('option',null,txt);op.value=val;s.appendChild(op);}s.value=String(get());};
+  r.append(l,s);p.appendChild(r);s.addEventListener('change',()=>{set(s.value);if(after)after();refreshUI();});ctrls.push(fill);return r;
+}
+function btn(p,txt,fn){const b=el('button',null,txt);b.addEventListener('click',()=>{fn();b.blur();});p.appendChild(b);return b;}
+function refreshUI(){for(const f of ctrls)f();}
+const cam=()=>CAMS[S.sel];
+function setCam(k,val){cam()[k]=val;if(S.link&&k!=='post')for(const c of CAMS)c[k]=val;buildGizmos();}
+function runAutoAim(mode){
+  const list=S.link?[...Array(S.nCams).keys()]:[S.sel],out=[];let head=null;
+  for(const ci of list){const r=autoAim(ci,mode);out.push(r.text);if(ci===S.sel||head==null)head=r;}
+  const n=head.len;
+  $('aimOut').innerHTML=`<b class="big">${n===0?'No bay feasible':n+' bay'+(n>1?'s':'')+' feasible'}</b> for camera ${head.ci+1}, `+
+    (mode==='far'?'longest run anywhere along the row (zoomed in)':'group starting at the first bay ahead of its post')+
+    `\n${S.carsBlock?'Parked cars count as blocking.':'Empty-street geometry: parked cars are not counted as blocking.'}\n\n`+out.join('\n\n');
+  buildGizmos();refreshUI();
+}
+(function buildUI(){
+  let d=sec('Simulation',true),b=el('div','btns');d.appendChild(b);
+  const nb=btn(b,'Day',()=>{S.night=!S.night;nb.textContent=S.night?'Night':'Day';applyNight();});
+  const ab=btn(b,'AI traffic: off',()=>{S.ai=!S.ai;ab.textContent='AI traffic: '+(S.ai?'on':'off');ab.classList.toggle('on',S.ai);});
+  btn(b,'Reset',()=>{populate();});
+  btn(b,'Fill every bay',()=>{populate(true);});
+  choice(d,'Add car type',[['random','random'],['sedan','sedan'],['suv','SUV'],['van','van'],['tuk','tuk-tuk'],['scooter','scooter']],()=>S.addType,v=>S.addType=v);
+  b=el('div','btns');d.appendChild(b);
+  btn(b,'Add car at soi entrance',addCar);btn(b,'Remove selected car',()=>{if(selected)removeVehicle(selected);});
+  choice(d,'Time speed',[['1','1×'],['2','2×'],['4','4×']],()=>S.speed,v=>S.speed=+v);
+  slider(d,'AI stay, longest',()=>S.stayMax,v=>S.stayMax=v,30,300,10,' s');
+  check(d,'Main view follows the selected car',()=>S.follow,v=>S.follow=v);
+  d.appendChild(el('div','note','Click a car, then <kbd>W</kbd>/<kbd>S</kbd> or <kbd>↑</kbd>/<kbd>↓</kbd> drive and reverse, <kbd>A</kbd>/<kbd>D</kbd> or <kbd>←</kbd>/<kbd>→</kbd> steer, <kbd>Space</kbd> brake, <kbd>Esc</kbd> deselect. Main view: drag = orbit, right-drag or Shift-drag = pan, wheel = zoom.'));
+
+  d=sec('Cameras (Hikvision iDS-TCR803-G)',true);
+  slider(d,'Number of cameras',()=>S.nCams,v=>{S.nCams=v;S.sel=Math.min(S.sel,v-1);},1,3,1,'',buildGizmos);
+  b=el('div','btns');d.appendChild(b);
+  const sp=m=>{S.postSpacing=m;buildPosts();applyNight();CAMS.forEach((c,i)=>c.post=Math.min(i,posts.length-1));buildGizmos();};
+  btn(b,'Every 4 bays (20 m)',()=>{sp(20);refreshUI();});btn(b,'Every 3 bays (15 m)',()=>{sp(15);refreshUI();});
+  check(d,'Same mount, aim and lens on all cameras',()=>S.link,v=>S.link=v);
+  choice(d,'Edit camera',()=>[...Array(S.nCams).keys()].map(i=>[i,'Camera '+(i+1)]),()=>S.sel,v=>S.sel=+v);
+  choice(d,'Side',[['kerb','Parking side, on lamp post'],['fence','Fence side (no pole there today)']],()=>cam().side,v=>{setCam('side',v);(S.link?[0,1,2]:[S.sel]).forEach(aimDefault);},buildGizmos);
+  choice(d,'Lamp post',()=>posts.map((x,i)=>[i,`Post ${i+1} (x = ${x.toFixed(0)} m)`]),()=>cam().post,v=>setCam('post',+v));
+  slider(d,'Height',()=>cam().h,v=>setCam('h',v),4,8,0.1,' m');
+  slider(d,'Arm length',()=>cam().arm,v=>setCam('arm',v),0,2,0.1,' m');
+  slider(d,'Pan',()=>cam().pan,v=>setCam('pan',v),-180,180,0.5,'°');
+  slider(d,'Tilt',()=>cam().tilt,v=>setCam('tilt',v),-89,10,0.5,'°');
+  choice(d,'Lens',[['tele','11–55 mm'],['wide','4–11 mm']],()=>cam().lens,v=>setCam('lens',v));
+  const rf=slider(d,'Zoom (focal)',()=>cam().focal,v=>setCam('focal',v),11,55,0.5,' mm');
+  const rh=slider(d,'Zoom (focal)',()=>cam().focalW,v=>setCam('focalW',v),4,11,0.25,' mm');
+  ctrls.push(()=>{rf.style.display=cam().lens==='tele'?'':'none';rh.style.display=cam().lens==='tele'?'none':'';});
+  const info=el('div','note');d.appendChild(info);
+  ctrls.push(()=>{const t=lensTan(cam());info.textContent=`View ${(2*Math.atan(t[0])*R2D).toFixed(1)}° × ${(2*Math.atan(t[1])*R2D).toFixed(1)}° on 3840 × 2160, 25 fps. Ends of each zoom range from the datasheet; views in between are estimated.`+
+    (cam().lens==='wide'?' The real 4–11 mm lens bends straight lines near the edges at its wide end; here it is drawn as a straight-line lens with the published horizontal and vertical views, so the picture is letterboxed and its side edges are approximate.':'')+
+    ' Pan 0° looks along the traffic direction; positive pan turns toward the fence.';});
+  b=el('div','btns');d.appendChild(b);
+  btn(b,'Aim at readable zone',()=>{(S.link?[0,1,2]:[S.sel]).forEach(aimDefault);buildGizmos();refreshUI();});
+  btn(b,'Auto-aim',()=>runAutoAim('near'));btn(b,'Auto-aim, long range',()=>runAutoAim('far'));
+
+  d=sec('Readability rule',false);
+  slider(d,'Readable from',()=>S.pxOk,v=>S.pxOk=v,15,80,1,' px');
+  slider(d,'Good from',()=>S.pxGood,v=>S.pxGood=v,20,120,1,' px');
+  slider(d,'Max horizontal angle',()=>S.maxH,v=>S.maxH=v,10,60,1,'°');
+  slider(d,'Max vertical angle',()=>S.maxV,v=>S.maxV=v,10,60,1,'°');
+  slider(d,'ENTRY after still',()=>S.entryT,v=>S.entryT=v,1,10,0.5,' s');
+  slider(d,'Read window after EXIT',()=>S.exitWin,v=>S.exitWin=v,0,15,0.5,' s');
+  check(d,'Bay colours and auto-aim count parked cars as blocking',()=>S.carsBlock,v=>S.carsBlock=v);
+  check(d,'Cars parked at Reset / Fill were read when they arrived (start marked)',()=>S.preMarked,v=>S.preMarked=v);
+  check(d,'An event only uses reads from a camera that has the bay in its picture',()=>S.sameCamOnly,v=>S.sameCamOnly=v);
+
+  d=sec('Street',false);
+  slider(d,'Lamp-post spacing',()=>S.postSpacing,v=>S.postSpacing=v,10,30,1,' m',()=>{buildPosts();applyNight();buildGizmos();});
+  slider(d,'First post at x',()=>S.postFirst,v=>S.postFirst=v,0,20,0.5,' m',()=>{buildPosts();applyNight();buildGizmos();});
+  check(d,'Tree canopies',()=>S.canopies,v=>S.canopies=v,buildTrees);
+  slider(d,'Canopy width',()=>S.canopyW,v=>S.canopyW=v,3,6,0.1,' m',buildTrees);
+  slider(d,'Tree spacing',()=>S.treeSpacing,v=>S.treeSpacing=v,6,20,1,' m',buildTrees);
+  slider(d,'First tree at x',()=>S.treeFirst,v=>S.treeFirst=v,0,10,0.5,' m',buildTrees);
+  d.appendChild(el('div','note',`Fixed: ${NB} bays × ${BAYL.toFixed(1)} m = ${(NB*BAYL).toFixed(1)} m, from x = ${BAY0} m to x = ${BAY0+NB*BAYL} m. Parking lane ${LANE_P} m, travel lane ${LANE_T} m, section ${LEN} m.`));
+
+  d=sec('Display',false);
+  check(d,'Camera footprints on the ground',()=>S.footprints,v=>S.footprints=v);
+  check(d,'Plate boxes in the camera picture',()=>S.boxes,v=>S.boxes=v);
+  d.appendChild(el('div','note','Bay colour and the dot above each car: <span class="chip g">good</span> <span class="chip a">readable</span> <span class="chip r">seen, not readable</span> <span class="chip m">marked: plate read earlier, now hidden</span> <span class="chip x">hidden, never read / out of view</span>'));
+  refreshUI();
+})();
+function addCar(){
+  let t=S.addType,taxi=false;
+  if(t==='random'){const r=Math.random();t=r<0.45?'sedan':r<0.7?'suv':r<0.82?'van':r<0.92?'tuk':'scooter';taxi=t==='sedan'&&Math.random()<0.3;}
+  const v=makeVehicle(t,3,LANE_Z,0,{taxi});
+  if(poseBlocked(v,v.x,v.z,v.th,0)){removeVehicle(v);flash('The soi entrance is blocked. Move the car there first.');return;}
+  select(v);
+}
+let flashMsg='',flashUntil=0;
+function flash(m){flashMsg=m;flashUntil=performance.now()+3500;}
+$('togL').onclick=()=>{left.classList.toggle('hidden');layout();};
+$('togR').onclick=()=>{$('right').classList.toggle('hidden');layout();};
+$('clearLog').onclick=()=>{events=[];};
+
+// PiP
+const pip=$('pip'),pipOv=$('pipOv'),pipT=$('pipTitle');
+let pipRect={x:0,y:0,w:0,h:0};
+function layout(){
+  const W=window.innerWidth,H=window.innerHeight,lw=left.classList.contains('hidden')?0:296,rw=$('right').classList.contains('hidden')?0:344;
+  renderer.setSize(W,H,false);mainCam.aspect=W/H;mainCam.updateProjectionMatrix();
+  const w=clamp(W-lw-rw-28,220,S.pipMax||500),h=Math.round(w*9/16);
+  pip.style.left=(lw+12)+'px';pip.style.bottom='12px';pip.style.width=w+'px';pip.style.height=h+'px';
+  pipRect={x:lw+14,y:14,w,h};
+  const dpr=Math.min(window.devicePixelRatio||1,2);pipOv.width=w*dpr;pipOv.height=h*dpr;
+  $('hud').style.left=(lw+(W-lw-rw)/2)+'px';
+}
+window.addEventListener('resize',layout);
+function drawPipTitle(){
+  let h='';for(let i=0;i<S.nCams;i++)h+=`<button data-i="${i}" class="${i===S.sel?'on':''}">CAM ${i+1}</button>`;
+  const t=lensTan(cam());h+=`<span>3840×2160 · ${(2*Math.atan(t[0])*R2D).toFixed(1)}° × ${(2*Math.atan(t[1])*R2D).toFixed(1)}°</span>`;
+  if(pipT.dataset.k!==h){pipT.innerHTML=h;pipT.dataset.k=h;pip.style.borderColor=CAMCOL[S.sel];}
+}
+pipT.addEventListener('click',e=>{const i=e.target.dataset&&e.target.dataset.i;if(i!=null){S.sel=+i;refreshUI();}});
+const STCOL={good:'#22c55e',ok:'#f59e0b',small:'#ef4444',angle:'#ef4444',hidden:'#9ca3af'};
+// the part of the picture-in-picture box the image fills (letterboxed when the view is wider than 16:9)
+function pipBox(w,h){const a=CM[S.sel].tanH/CM[S.sel].tanV;return a>w/h?{x:0,y:(h-w/a)/2,w,h:w/a}:{x:(w-h*a)/2,y:0,w:h*a,h};}
+function drawPipOverlay(){
+  const x=pipOv.getContext('2d'),B=pipBox(pipOv.width,pipOv.height);x.clearRect(0,0,pipOv.width,pipOv.height);if(!S.boxes)return;
+  x.save();x.translate(B.x,B.y);const W=B.w,H=B.h;
+  const k=H/SENS_H;x.font=`${Math.round(W/46)}px sans-serif`;x.lineWidth=Math.max(1,W/400);
+  for(const v of vehicles)for(const p of v.pl){
+    const r=p.res[S.sel];if(!r||r.st==='out'||r.st==='back')continue;
+    const cx=(r.u+1)/2*W,cy=(1-r.w)/2*H,h=Math.max(5,r.px*k),w=Math.max(11,r.px*k*PLATE_W/PLATE_H);
+    const mk=r.st==='hidden'&&v.known;
+    x.strokeStyle=x.fillStyle=mk?'#60a5fa':STCOL[r.st];x.setLineDash(r.st==='hidden'?[4,3]:[]);
+    x.strokeRect(cx-w/2-2,cy-h/2-2,w+4,h+4);
+    x.fillText(mk?'marked '+v.text:r.st==='hidden'?'hidden':r.px.toFixed(0)+' px',cx+w/2+5,cy+4);
+  }
+  x.restore();
+}
+
+// main-view orbit controls
+const orbit={t:new THREE.Vector3(42,0,2),r:64,az:-0.32,pol:1.0};
+function applyOrbit(){
+  const sp=Math.sin(orbit.pol);
+  mainCam.position.set(orbit.t.x+orbit.r*sp*Math.sin(orbit.az),orbit.t.y+orbit.r*Math.cos(orbit.pol),orbit.t.z+orbit.r*sp*Math.cos(orbit.az));
+  mainCam.lookAt(orbit.t);
+}
+const ray=new THREE.Raycaster();
+(function pointer(){
+  let down=null;
+  canvas.addEventListener('contextmenu',e=>e.preventDefault());
+  canvas.addEventListener('pointerdown',e=>{canvas.setPointerCapture(e.pointerId);if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+    down={x:e.clientX,y:e.clientY,lx:e.clientX,ly:e.clientY,pan:e.button===2||e.shiftKey||e.ctrlKey,moved:0,btn:e.button};});
+  canvas.addEventListener('pointermove',e=>{
+    if(!down)return;const dx=e.clientX-down.lx,dy=e.clientY-down.ly;down.lx=e.clientX;down.ly=e.clientY;down.moved+=Math.abs(dx)+Math.abs(dy);
+    if(down.pan){const k=orbit.r*0.0016,ca=Math.cos(orbit.az),sa=Math.sin(orbit.az);
+      orbit.t.x+=(-dx*ca-dy*sa)*k;orbit.t.z+=(dx*sa-dy*ca)*k;}
+    else{orbit.az-=dx*0.005;orbit.pol=clamp(orbit.pol-dy*0.005,0.05,1.52);}
+  });
+  canvas.addEventListener('pointerup',e=>{
+    if(down&&down.moved<5&&down.btn===0){
+      const m=new THREE.Vector2(e.clientX/window.innerWidth*2-1,-(e.clientY/window.innerHeight)*2+1);
+      ray.setFromCamera(m,mainCam);const hit=ray.intersectObjects(vehicles.map(v=>v.group),true);
+      if(hit.length){let o=hit[0].object;while(o&&!o.userData.veh)o=o.parent;if(o)select(o.userData.veh);}
+    }
+    down=null;
+  });
+  canvas.addEventListener('wheel',e=>{e.preventDefault();orbit.r=clamp(orbit.r*Math.exp(e.deltaY*0.001),3,220);},{passive:false});
+})();
+const KEYMAP={KeyW:'up',ArrowUp:'up',KeyS:'down',ArrowDown:'down',KeyA:'left',ArrowLeft:'left',KeyD:'right',ArrowRight:'right',Space:'brake'};
+window.addEventListener('keydown',e=>{
+  if(e.code==='Escape'){select(null);return;}
+  const k=KEYMAP[e.code];if(!k||e.metaKey||e.ctrlKey)return;
+  if(selected||e.code==='Space'){e.preventDefault();const a=document.activeElement;if(a&&a!==document.body&&a.blur)a.blur();}
+  keys[k]=true;
+});
+window.addEventListener('keyup',e=>{const k=KEYMAP[e.code];if(k)keys[k]=false;});
+window.addEventListener('blur',()=>{for(const k in keys)keys[k]=false;});
+
+// ---------------------------------------------------------------- text panels
+function fmtT(t){const s=Math.floor(36000+t);return pad(Math.floor(s/3600)%24)+':'+pad(Math.floor(s/60)%60)+':'+pad(s%60);}
+function fmtD(t){t=Math.max(0,Math.floor(t));return pad(Math.floor(t/60))+':'+pad(t%60);}
+function ranges(list){
+  const out=[];let s=null,p=null;
+  for(const n of list){if(s==null)s=p=n;else if(n===p+1)p=n;else{out.push(s===p?''+s:s+'–'+p);s=p=n;}}
+  if(s!=null)out.push(s===p?''+s:s+'–'+p);return out.join(', ')||'none';
+}
+function longestRun(list){let b=0,r=0,p=null;for(const n of list){r=(p!=null&&n===p+1)?r+1:1;p=n;if(r>b)b=r;}return b;}
+function chip(r){
+  if(!r)return '';const c=r.st==='good'?'g':r.st==='ok'?'a':(r.st==='out'||r.st==='back'||r.st==='hidden')?'x':'r';
+  let t=STXT[r.st];if(r.st==='hidden')t+=' ('+r.blk+')';
+  if(RANK[r.st]>=3)t+=' '+r.px.toFixed(0)+' px';
+  return `<span class="chip ${c}">${t}</span>`+(RANK[r.st]>=1?` C${r.cam+1}${r.which}`:'');
+}
+function updatePanels(){
+  // zone
+  const ci=S.sel,cm=CM[ci],z=zoneScan(ci),c=CAMS[ci],f=(a,b)=>a==null?'none':`${a.toFixed(1)} – ${b.toFixed(1)} m`;
+  const xs=(a,b)=>a==null?'':` (x = ${(cm.x+z.sg*a).toFixed(1)} – ${(cm.x+z.sg*b).toFixed(1)} m)`;
+  $('zone').textContent=
+    `Camera ${ci+1}: post ${c.post+1} at x = ${cm.x.toFixed(1)} m, ${c.side==='kerb'?'parking side':'fence side'}, height ${cm.y.toFixed(1)} m\n`+
+    `Rule limits, any aim:  ${f(z.rn,z.rf)}${xs(z.rn,z.rf)}\n`+
+    `Readable, current aim: ${f(z.an,z.af)}${xs(z.an,z.af)}\n`+
+    `Picture covers:        ${f(z.fn,z.ff)}\n`+
+    `Distances are along the bay centre line, ${z.sg>0?'ahead of':'behind'} the post, plate ${PLATE_Y} m high, nothing in the way.`;
+  // coverage summary
+  let cv='';const all=new Set();
+  for(let i=0;i<S.nCams;i++){const l=[];for(let b=0;b<NB;b++)if(bayCam[i][b]){l.push(b+1);all.add(b);}
+    cv+=`<span style="color:${CAMCOL[i]}">Camera ${i+1}</span>: rear plate readable in bays ${ranges(l)} (${longestRun(l)} in a row)<br>`;}
+  $('cover').innerHTML=cv+`${all.size} of ${NB} bays covered${S.carsBlock?', parked cars counted as blocking':', parked cars not counted as blocking'}.`;
+  // bays
+  const st=[];for(let b=0;b<NB;b++)st.push({en:0,er:0,xn:0,xr:0});
+  for(const e of events){const s=st[e.bay];if(e.kind==='ENTRY'){s.en++;if(e.read)s.er++;}else{s.xn++;if(e.read)s.xr++;}}
+  let h='<tr><th>Bay</th><th>Now</th><th>Parked</th><th>Entry</th><th>Exit</th><th>%</th></tr>';
+  for(let b=0;b<NB;b++){
+    const ps=vehicles.filter(v=>v.bay===b).map(v=>`${v.text} ${fmtD(simTime-v.parkedAt)}`+(v.entryRead===undefined?'':v.entryRead?' ✓':' ✗')).join('<br>');
+    const s=st[b],n=s.en+s.xn;
+    h+=`<tr><td>${b+1}</td><td>${chip(bayRes[b])}</td><td>${ps||'—'}</td><td>${s.en?s.er+'/'+s.en:'—'}</td><td>${s.xn?s.xr+'/'+s.xn:'—'}</td><td>${n?Math.round((s.er+s.xr)/n*100)+'%':'—'}</td></tr>`;
+  }
+  $('bays').innerHTML=h;
+  // log
+  let lg='';
+  for(let i=events.length-1;i>=0&&i>=events.length-120;i--){const e=events[i];
+    const rd=e.read?`${e.text}  ${e.read.px.toFixed(0)} px ${e.read.which} CAM${e.read.cam+1}`:`<span class="np">no plate${e.seen?'':' (bay outside every camera picture)'}</span>`;
+    lg+=`<div>${fmtT(e.t)}  BAY ${pad(e.bay+1)}  <span class="${e.kind==='ENTRY'?'en':'ex'}">${e.kind.padEnd(5,' ')}</span>  ${rd}${e.live?' …':''}</div>`;}
+  $('log').innerHTML=lg||'<span class="np">No events yet. Park a car in a bay or switch AI traffic on.</span>';
+  // hud
+  let hud=`<b>${fmtT(simTime)}</b> · `;
+  if(performance.now()<flashUntil)hud+=`<span class="warn">${flashMsg}</span>`;
+  else if(selected){
+    const v=selected;hud+=`${TNAME[v.type]} <b>${v.text}</b> · ${(Math.abs(v.v)*3.6).toFixed(0)} km/h ${v.v<-0.05?'R':v.v>0.05?'D':'stopped'}`+
+      (v.bay>=0?` · in bay ${v.bay+1} for ${fmtD(simTime-v.parkedAt)}`:v.stillBay>=0?` · still in bay ${v.stillBay+1}: ${v.stillT.toFixed(1)} s`:'')+(v.ai?' · AI driving':'');
+    for(const p of v.pl){let b=null;for(let i=0;i<S.nCams;i++){const r=p.res[i];if(r&&(!b||RANK[r.st]>RANK[b.st]||(RANK[r.st]===RANK[b.st]&&r.px>b.px))){b=r;b.cam=i;}}
+      if(b)hud+=`<br>${p.name} plate: ${STXT[b.st]}${b.st==='hidden'?' by '+b.blk+(v.known?' · marked as '+v.text:' · never read'):''}${RANK[b.st]>=1?` · CAM${b.cam+1} ${b.px.toFixed(0)} px, H ${b.h.toFixed(0)}°, V ${b.v.toFixed(0)}°`:''}`;}
+  }else hud+='Click a car to drive it';
+  $('hud').innerHTML=hud;
+}
+
+// ---------------------------------------------------------------- loop
+const MARKCOL=[0x6b7280,0x6b7280,0xef4444,0xef4444,0xf59e0b,0x22c55e];
+function simStep(dt){
+  simTime+=dt;
+  if(selected)driveStep(selected,dt);
+  for(const v of vehicles)if(v.ai)aiStep(v,dt);
+  aiManage(dt);
+  for(let i=vehicles.length-1;i>=0;i--){const v=vehicles[i];if(v.x>LEN+6||v.x<-7)removeVehicle(v);}
+  evaluateVehicles(dt);
+}
+let last=performance.now(),panelT=0;
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt=Math.min(0.05,(now-last)/1000);last=now;
+  computeCM();evaluateBays();
+  for(let k=0;k<S.speed;k++)simStep(dt);
+  for(const v of vehicles){syncVeh(v);v.mark.material.color.setHex(v.rank<4&&v.known?0x3b82f6:MARKCOL[v.rank]);}
+  updateFootprints();
+  if(S.follow&&selected){orbit.t.x+=(selected.x-orbit.t.x)*0.08;orbit.t.z+=(selected.z-orbit.t.z)*0.08;}
+  applyOrbit();
+  const cm=CM[S.sel];
+  pipCam.fov=2*Math.atan(cm.tanV)*R2D;pipCam.aspect=cm.tanH/cm.tanV;pipCam.updateProjectionMatrix();
+  pipCam.position.set(cm.x,cm.y,cm.z);pipCam.up.set(0,1,0);pipCam.lookAt(cm.x+cm.fx,cm.y+cm.fy,cm.z+cm.fz);
+  const W=window.innerWidth,H=window.innerHeight;
+  renderer.setScissorTest(false);renderer.setViewport(0,0,W,H);renderer.clear();renderer.render(scene,mainCam);
+  renderer.setScissorTest(true);renderer.setScissor(pipRect.x,pipRect.y,pipRect.w,pipRect.h);
+  renderer.setClearColor(0x000000,1);renderer.clear();
+  const PB=pipBox(pipRect.w,pipRect.h);
+  renderer.setViewport(pipRect.x+PB.x,pipRect.y+PB.y,PB.w,PB.h);renderer.setScissor(pipRect.x+PB.x,pipRect.y+PB.y,PB.w,PB.h);
+  renderer.clear();renderer.render(scene,pipCam);
+  drawPipOverlay();
+  if(now-panelT>200){panelT=now;drawPipTitle();updatePanels();}
+}
+
+buildTrees();buildPosts();applyNight();
+for(let i=0;i<3;i++)aimDefault(i);
+if(window.innerWidth<1000)$('right').classList.add('hidden');   // narrow window: open the panels with the ☰ buttons
+if(window.innerWidth<700)left.classList.add('hidden');
+buildGizmos();populate();layout();refreshUI();
+window.SIM={S,CAMS,CM,get vehicles(){return vehicles;},get events(){return events;},bayRes,zoneScan,autoAim,makeVehicle,select,keys,simStep,orbit,planLeave};
+requestAnimationFrame(frame);
+})();
+</script>
 </body>
 </html>
